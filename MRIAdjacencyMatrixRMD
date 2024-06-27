@@ -1,0 +1,493 @@
+```{r}
+# Load necessary libraries
+library(ggseg)
+library(ggsegDKT)
+library(sf)
+library(distances)
+
+# Load the DKT atlas data
+data("dkt")
+
+# Extract region coordinates using the sf package
+dkt_coords <- as.data.frame(dkt$data)
+dkt_coords$centroid <- st_centroid(dkt_coords$geometry)
+
+# Lists of regions for left and right hemispheres, including Pericalcarine
+regions_right <- c(
+    "caudal anterior cingulate", "cuneus", "entorhinal", "fusiform", "inferior temporal", 
+    "isthmus cingulate", "lateral occipital", "lateral orbitofrontal", "lingual", "medial orbitofrontal", 
+    "parahippocampal", "paracentral", "postcentral", "posterior cingulate", "precentral", 
+    "precuneus", "rostral anterior cingulate", "superior frontal", "superior parietal", 
+    "superior temporal", "insula", "caudal middle frontal", "fusiform", "inferior parietal", 
+    "inferior temporal", "lateral occipital", "lateral orbitofrontal", "middle temporal", 
+    "postcentral", "precentral", "rostral middle frontal", "superior frontal", "superior parietal", 
+    "superior temporal", "supramarginal", "transverse temporal", "insula", 
+    "pars opercularis", "pars orbitalis", "pars triangularis", "pericalcarine"
+)
+
+regions_left <- c(
+    "caudal middle frontal", "fusiform", "inferior parietal", "inferior temporal", "lateral occipital", 
+    "lateral orbitofrontal", "middle temporal", "postcentral", "precentral", "rostral middle frontal", 
+    "superior frontal", "superior parietal", "superior temporal", "supramarginal", "transverse temporal", 
+    "insula", "caudal anterior cingulate", "cuneus", "entorhinal", "fusiform", "inferior temporal", 
+    "isthmus cingulate", "lateral occipital", "lateral orbitofrontal", "lingual", "medial orbitofrontal", 
+    "parahippocampal", "paracentral", "postcentral", "posterior cingulate", "precentral", 
+    "precuneus", "rostral anterior cingulate", "superior frontal", "superior parietal", "superior temporal",
+    "pars opercularis", "pars orbitalis", "pars triangularis", "pericalcarine"
+)
+
+# Identify and handle duplicates
+unique_regions_right <- c()
+unique_regions_left <- c()
+
+# Process regions for the right hemisphere
+for (region in regions_right) {
+    if (!(region %in% unique_regions_right)) {
+        unique_regions_right <- c(unique_regions_right, region)
+    } else {
+        unique_regions_right <- c(unique_regions_right, paste(region, "dup", sep = "_"))
+    }
+}
+
+# Process regions for the left hemisphere
+for (region in regions_left) {
+    if (!(region %in% unique_regions_left)) {
+        unique_regions_left <- c(unique_regions_left, region)
+    } else {
+        unique_regions_left <- c(unique_regions_left, paste(region, "dup", sep = "_"))
+    }
+}
+
+# Separate the data into left and right hemispheres with handled duplicates
+dkt_coords_left <- subset(dkt_coords, hemi == "left" & region %in% unique_regions_left)
+dkt_coords_right <- subset(dkt_coords, hemi == "right" & region %in% unique_regions_right)
+
+# Update region names to handle duplicates
+dkt_coords_left$region <- unique_regions_left
+dkt_coords_right$region <- unique_regions_right
+
+# Extract the coordinates for each hemisphere
+centroids_left <- st_coordinates(dkt_coords_left$centroid)
+centroids_right <- st_coordinates(dkt_coords_right$centroid)
+
+# Combine with region names for easier reference
+region_centroids_left <- data.frame(
+    region = dkt_coords_left$region,
+    x = centroids_left[, 1],
+    y = centroids_left[, 2]
+)
+
+region_centroids_right <- data.frame(
+    region = dkt_coords_right$region,
+    x = centroids_right[, 1],
+    y = centroids_right[, 2]
+)
+
+# Calculate Euclidean distance matrix for the left hemisphere
+distance_matrix_left <- distances::distances(region_centroids_left[, c("x", "y")])
+distance_matrix_left <- as.matrix(distance_matrix_left)
+
+# Calculate Euclidean distance matrix for the right hemisphere
+distance_matrix_right <- distances::distances(region_centroids_right[, c("x", "y")])
+distance_matrix_right <- as.matrix(distance_matrix_right)
+
+# Ensure row and column names match the regions
+rownames(distance_matrix_left) <- region_centroids_left$region
+colnames(distance_matrix_left) <- region_centroids_left$region
+
+rownames(distance_matrix_right) <- region_centroids_right$region
+colnames(distance_matrix_right) <- region_centroids_right$region
+
+# Remove rows and columns with '_dup' in their names
+distance_matrix_left_final <- distance_matrix_left[!grepl("_dup", rownames(distance_matrix_left)), !grepl("_dup", colnames(distance_matrix_left))]
+distance_matrix_right_final <- distance_matrix_right[!grepl("_dup", rownames(distance_matrix_right)), !grepl("_dup", colnames(distance_matrix_right))]
+
+# Save the final distance matrices to CSV files
+write.csv(distance_matrix_left_final, "distance_matrix_left_final.csv", row.names = TRUE)
+write.csv(distance_matrix_right_final, "distance_matrix_right_final.csv", row.names = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(readr)
+
+# Load the distance matrices
+distance_matrix_left_final <- read_csv("distance_matrix_left_final.csv", col_names = TRUE)
+distance_matrix_right_final <- read_csv("distance_matrix_right_final.csv", col_names = TRUE)
+
+# Remove the first column (row names) after reading the CSVs
+distance_matrix_left_final <- distance_matrix_left_final[, -1]
+distance_matrix_right_final <- distance_matrix_right_final[, -1]
+
+# Function to extract lower triangle values excluding the diagonal
+get_lower_triangle <- function(matrix) {
+  matrix[upper.tri(matrix, diag = TRUE)] <- NA
+  return(matrix[!is.na(matrix)])
+}
+
+# Extract lower triangle values
+lower_triangle_left <- get_lower_triangle(as.matrix(distance_matrix_left_final))
+lower_triangle_right <- get_lower_triangle(as.matrix(distance_matrix_right_final))
+
+# Calculate the 0.25 quantile of the lower triangle values
+quantile_left <- quantile(lower_triangle_left, 0.25, na.rm = TRUE)
+quantile_right <- quantile(lower_triangle_right, 0.25, na.rm = TRUE)
+
+# Create adjacency matrices based on the 0.25 quantile
+adjacency_matrix_left <- as.matrix(distance_matrix_left_final) < quantile_left
+adjacency_matrix_right <- as.matrix(distance_matrix_right_final) < quantile_right
+
+# Convert logical matrices to numeric (1 for TRUE, 0 for FALSE)
+adjacency_matrix_left <- as.numeric(adjacency_matrix_left)
+adjacency_matrix_right <- as.numeric(adjacency_matrix_right)
+
+adjacency_matrix_left <- matrix(adjacency_matrix_left, nrow = nrow(distance_matrix_left_final), ncol = ncol(distance_matrix_left_final))
+adjacency_matrix_right <- matrix(adjacency_matrix_right, nrow = nrow(distance_matrix_right_final), ncol = ncol(distance_matrix_right_final))
+
+# Set row and column names
+rownames(adjacency_matrix_left) <- rownames(distance_matrix_left_final)
+colnames(adjacency_matrix_left) <- colnames(distance_matrix_left_final)
+
+rownames(adjacency_matrix_right) <- rownames(distance_matrix_right_final)
+colnames(adjacency_matrix_right) <- colnames(distance_matrix_right_final)
+
+# Save the adjacency matrices to CSV files
+write.csv(adjacency_matrix_left, "adjacency_matrix_left.csv", row.names = TRUE)
+write.csv(adjacency_matrix_right, "adjacency_matrix_right.csv", row.names = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(readr)
+
+# Load the adjacency matrices
+adjacency_matrix_left <- read_csv("adjacency_matrix_left.csv", col_names = TRUE)
+adjacency_matrix_right <- read_csv("adjacency_matrix_right.csv", col_names = TRUE)
+
+# Convert the first column to row names and then remove it
+adjacency_matrix_left <- as.matrix(adjacency_matrix_left)
+rownames(adjacency_matrix_left) <- adjacency_matrix_left[, 1]
+adjacency_matrix_left <- adjacency_matrix_left[, -1]
+
+adjacency_matrix_right <- as.matrix(adjacency_matrix_right)
+rownames(adjacency_matrix_right) <- adjacency_matrix_right[, 1]
+adjacency_matrix_right <- adjacency_matrix_right[, -1]
+
+# Ensure the matrices are numeric
+adjacency_matrix_left <- apply(adjacency_matrix_left, 2, as.numeric)
+adjacency_matrix_right <- apply(adjacency_matrix_right, 2, as.numeric)
+
+# Get the dimensions of the adjacency matrices
+n_left <- nrow(adjacency_matrix_left)
+n_right <- nrow(adjacency_matrix_right)
+
+# Create an empty 60x60 matrix
+combined_matrix <- matrix(0, nrow = n_left + n_right, ncol = n_left + n_right)
+
+# Insert the left adjacency matrix into the top-left corner
+combined_matrix[1:n_left, 1:n_left] <- adjacency_matrix_left
+
+# Insert the right adjacency matrix into the bottom-right corner
+combined_matrix[(n_left + 1):(n_left + n_right), (n_left + 1):(n_left + n_right)] <- adjacency_matrix_right
+
+# Combine row and column names
+combined_row_names <- c(rownames(adjacency_matrix_left), rownames(adjacency_matrix_right))
+combined_col_names <- c(colnames(adjacency_matrix_left), colnames(adjacency_matrix_right))
+
+# Set row and column names
+rownames(combined_matrix) <- combined_row_names
+colnames(combined_matrix) <- combined_col_names
+
+# Save the combined matrix to a CSV file
+write.csv(combined_matrix, "combined_adjacency_matrix.csv", row.names = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(readr)
+
+# Load the adjacency matrices
+adjacency_matrix_left <- read_csv("adjacency_matrix_left.csv", col_names = TRUE, show_col_types = FALSE)
+adjacency_matrix_right <- read_csv("adjacency_matrix_right.csv", col_names = TRUE, show_col_types = FALSE)
+
+# Convert the first column to row names and then remove it
+adjacency_matrix_left <- as.data.frame(adjacency_matrix_left)
+rownames(adjacency_matrix_left) <- adjacency_matrix_left[, 1]
+adjacency_matrix_left <- adjacency_matrix_left[, -1]
+
+adjacency_matrix_right <- as.data.frame(adjacency_matrix_right)
+rownames(adjacency_matrix_right) <- adjacency_matrix_right[, 1]
+adjacency_matrix_right <- adjacency_matrix_right[, -1]
+
+# Ensure the matrices are numeric
+adjacency_matrix_left[] <- lapply(adjacency_matrix_left, as.numeric)
+adjacency_matrix_right[] <- lapply(adjacency_matrix_right, as.numeric)
+
+# Function to replace spaces with underscores
+replace_spaces <- function(x) {
+  return(gsub(" ", "_", x))
+}
+
+# Add "left_" and "right_" prefixes to row and column names and replace spaces with underscores
+rownames(adjacency_matrix_left) <- paste("left_", replace_spaces(rownames(adjacency_matrix_left)), sep = "")
+colnames(adjacency_matrix_left) <- paste("left_", replace_spaces(colnames(adjacency_matrix_left)), sep = "")
+
+rownames(adjacency_matrix_right) <- paste("right_", replace_spaces(rownames(adjacency_matrix_right)), sep = "")
+colnames(adjacency_matrix_right) <- paste("right_", replace_spaces(colnames(adjacency_matrix_right)), sep = "")
+
+# Get the dimensions of the adjacency matrices
+n_left <- nrow(adjacency_matrix_left)
+n_right <- nrow(adjacency_matrix_right)
+
+# Create an empty matrix with the combined size
+combined_matrix <- matrix(0, nrow = n_left + n_right, ncol = n_left + n_right)
+
+# Insert the left adjacency matrix into the top-left corner
+combined_matrix[1:n_left, 1:n_left] <- as.matrix(adjacency_matrix_left)
+
+# Insert the right adjacency matrix into the bottom-right corner
+combined_matrix[(n_left + 1):(n_left + n_right), (n_left + 1):(n_left + n_right)] <- as.matrix(adjacency_matrix_right)
+
+# Combine row and column names
+combined_row_names <- c(rownames(adjacency_matrix_left), rownames(adjacency_matrix_right))
+combined_col_names <- c(colnames(adjacency_matrix_left), colnames(adjacency_matrix_right))
+
+# Set row and column names
+rownames(combined_matrix) <- combined_row_names
+colnames(combined_matrix) <- combined_col_names
+
+# Save the combined matrix to a CSV file
+write.csv(combined_matrix, "combined_adjacency_matrix.csv", row.names = TRUE)
+
+```
+
+```{r}
+# Load necessary libraries
+library(readr)
+
+# Load the adjacency matrices
+adjacency_matrix_left <- read_csv("adjacency_matrix_left.csv", col_names = TRUE, show_col_types = FALSE)
+adjacency_matrix_right <- read_csv("adjacency_matrix_right.csv", col_names = TRUE, show_col_types = FALSE)
+
+# Convert the first column to row names and then remove it
+adjacency_matrix_left <- as.data.frame(adjacency_matrix_left)
+rownames(adjacency_matrix_left) <- adjacency_matrix_left[, 1]
+adjacency_matrix_left <- adjacency_matrix_left[, -1]
+
+adjacency_matrix_right <- as.data.frame(adjacency_matrix_right)
+rownames(adjacency_matrix_right) <- adjacency_matrix_right[, 1]
+adjacency_matrix_right <- adjacency_matrix_right[, -1]
+
+# Ensure the matrices are numeric
+adjacency_matrix_left[] <- lapply(adjacency_matrix_left, as.numeric)
+adjacency_matrix_right[] <- lapply(adjacency_matrix_right, as.numeric)
+
+# Function to replace spaces with underscores
+replace_spaces <- function(x) {
+  return(gsub(" ", "_", x))
+}
+
+# Add "left_" and "right_" prefixes to row and column names and replace spaces with underscores
+rownames(adjacency_matrix_left) <- paste("left_", replace_spaces(rownames(adjacency_matrix_left)), sep = "")
+colnames(adjacency_matrix_left) <- paste("left_", replace_spaces(colnames(adjacency_matrix_left)), sep = "")
+
+rownames(adjacency_matrix_right) <- paste("right_", replace_spaces(rownames(adjacency_matrix_right)), sep = "")
+colnames(adjacency_matrix_right) <- paste("right_", replace_spaces(colnames(adjacency_matrix_right)), sep = "")
+
+# Get the dimensions of the adjacency matrices
+n_left <- nrow(adjacency_matrix_left)
+n_right <- nrow(adjacency_matrix_right)
+
+# Create an empty matrix with the combined size
+combined_matrix <- matrix(0, nrow = n_left + n_right, ncol = n_left + n_right)
+
+# Insert the left adjacency matrix into the top-left corner
+combined_matrix[1:n_left, 1:n_left] <- as.matrix(adjacency_matrix_left)
+
+# Insert the right adjacency matrix into the bottom-right corner
+combined_matrix[(n_left + 1):(n_left + n_right), (n_left + 1):(n_left + n_right)] <- as.matrix(adjacency_matrix_right)
+
+# Combine row and column names
+combined_row_names <- c(rownames(adjacency_matrix_left), rownames(adjacency_matrix_right))
+combined_col_names <- c(colnames(adjacency_matrix_left), colnames(adjacency_matrix_right))
+
+# Set row and column names
+rownames(combined_matrix) <- combined_row_names
+colnames(combined_matrix) <- combined_col_names
+
+# New row names for left and right matrices
+new_row_names_left <- c(
+  "left_caudal_middle_frontal", "left_fusiform", "left_inferior_parietal", "left_inferior_temporal",
+  "left_lateral_occipital", "left_lateral_orbitofrontal", "left_middle_temporal", "left_postcentral",
+  "left_precentral", "left_rostral_middle_frontal", "left_superior_frontal", "left_superior_parietal",
+  "left_superior_temporal", "left_supramarginal", "left_transverse_temporal", "left_insula",
+  "left_caudal_anterior_cingulate", "left_cuneus", "left_entorhinal", "left_isthmus_cingulate",
+  "left_lingual", "left_medial_orbitofrontal", "left_parahippocampal", "left_paracentral",
+  "left_posterior_cingulate", "left_precuneus", "left_rostral_anterior_cingulate", "left_pars_opercularis",
+  "left_pars_orbitalis", "left_pars_triangularis", "left_pericalcarine"
+)
+
+new_row_names_right <- c(
+  "right_caudal_anterior_cingulate", "right_cuneus", "right_entorhinal", "right_fusiform",
+  "right_inferior_temporal", "right_isthmus_cingulate", "right_lateral_occipital", "right_lateral_orbitofrontal",
+  "right_lingual", "right_medial_orbitofrontal", "right_parahippocampal", "right_paracentral",
+  "right_postcentral", "right_posterior_cingulate", "right_precentral", "right_precuneus",
+  "right_rostral_anterior_cingulate", "right_superior_frontal", "right_superior_parietal",
+  "right_superior_temporal", "right_insula", "right_caudal_middle_frontal", "right_inferior_parietal",
+  "right_middle_temporal", "right_rostral_middle_frontal", "right_supramarginal", "right_transverse_temporal",
+  "right_pars_opercularis", "right_pars_orbitalis", "right_pars_triangularis", "right_pericalcarine"
+)
+
+# Replace the row names in the combined matrix
+rownames(combined_matrix)[1:n_left] <- new_row_names_left
+rownames(combined_matrix)[(n_left + 1):(n_left + n_right)] <- new_row_names_right
+
+# Replace the column names in the combined matrix
+colnames(combined_matrix)[1:n_left] <- new_row_names_left
+colnames(combined_matrix)[(n_left + 1):(n_left + n_right)] <- new_row_names_right
+
+# Save the combined matrix to a CSV file
+write.csv(combined_matrix, "combined_adjacency_matrix.csv", row.names = TRUE)
+
+```
+
+```{r}
+# Load necessary libraries
+library(ggseg)
+library(ggsegDKT)
+library(sf)
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+# Load the DKT atlas data
+data("dkt")
+
+# Extract region coordinates using the sf package
+dkt_coords <- as.data.frame(dkt$data)
+dkt_coords$centroid <- st_centroid(dkt_coords$geometry)
+
+# Lists of regions for left and right hemispheres, including Pericalcarine
+regions_right <- c(
+    "caudal anterior cingulate", "cuneus", "entorhinal", "fusiform", "inferior temporal", 
+    "isthmus cingulate", "lateral occipital", "lateral orbitofrontal", "lingual", "medial orbitofrontal", 
+    "parahippocampal", "paracentral", "postcentral", "posterior cingulate", "precentral", 
+    "precuneus", "rostral anterior cingulate", "superior frontal", "superior parietal", 
+    "superior temporal", "insula", "caudal middle frontal", "fusiform", "inferior parietal", 
+    "inferior temporal", "lateral occipital", "lateral orbitofrontal", "middle temporal", 
+    "postcentral", "precentral", "rostral middle frontal", "superior frontal", "superior parietal", 
+    "superior temporal", "supramarginal", "transverse temporal", "insula", 
+    "pars opercularis", "pars orbitalis", "pars triangularis", "pericalcarine"
+)
+
+regions_left <- c(
+    "caudal middle frontal", "fusiform", "inferior parietal", "inferior temporal", "lateral occipital", 
+    "lateral orbitofrontal", "middle temporal", "postcentral", "precentral", "rostral middle frontal", 
+    "superior frontal", "superior parietal", "superior temporal", "supramarginal", "transverse temporal", 
+    "insula", "caudal anterior cingulate", "cuneus", "entorhinal", "fusiform", "inferior temporal", 
+    "isthmus cingulate", "lateral occipital", "lateral orbitofrontal", "lingual", "medial orbitofrontal", 
+    "parahippocampal", "paracentral", "postcentral", "posterior cingulate", "precentral", 
+    "precuneus", "rostral anterior cingulate", "superior frontal", "superior parietal", "superior temporal",
+    "pars opercularis", "pars orbitalis", "pars triangularis", "pericalcarine"
+)
+
+# Identify and handle duplicates
+unique_regions_right <- c()
+unique_regions_left <- c()
+
+# Process regions for the right hemisphere
+for (region in regions_right) {
+    if (!(region %in% unique_regions_right)) {
+        unique_regions_right <- c(unique_regions_right, region)
+    } else {
+        unique_regions_right <- c(unique_regions_right, paste(region, "dup", sep = "_"))
+    }
+}
+
+# Process regions for the left hemisphere
+for (region in regions_left) {
+    if (!(region %in% unique_regions_left)) {
+        unique_regions_left <- c(unique_regions_left, region)
+    } else {
+        unique_regions_left <- c(unique_regions_left, paste(region, "dup", sep = "_"))
+    }
+}
+
+# Separate the data into left and right hemispheres with handled duplicates
+dkt_coords_left <- subset(dkt_coords, hemi == "left" & region %in% unique_regions_left)
+dkt_coords_right <- subset(dkt_coords, hemi == "right" & region %in% unique_regions_right)
+
+# Update region names to handle duplicates
+dkt_coords_left$region <- unique_regions_left
+dkt_coords_right$region <- unique_regions_right
+
+# Extract the coordinates for each hemisphere
+centroids_left <- st_coordinates(dkt_coords_left$centroid)
+centroids_right <- st_coordinates(dkt_coords_right$centroid)
+
+# Combine with region names for easier reference
+region_centroids_left <- data.frame(
+    region = dkt_coords_left$region,
+    x = centroids_left[, 1],
+    y = centroids_left[, 2]
+)
+
+region_centroids_right <- data.frame(
+    region = dkt_coords_right$region,
+    x = centroids_right[, 1],
+    y = centroids_right[, 2]
+)
+
+# Load the adjacency matrices
+adjacency_matrix_left <- read_csv("adjacency_matrix_left.csv", col_names = TRUE, show_col_types = FALSE)
+adjacency_matrix_right <- read_csv("adjacency_matrix_right.csv", col_names = TRUE, show_col_types = FALSE)
+
+# Convert the first column to row names and then remove it
+adjacency_matrix_left <- as.data.frame(adjacency_matrix_left)
+rownames(adjacency_matrix_left) <- adjacency_matrix_left[, 1]
+adjacency_matrix_left <- adjacency_matrix_left[, -1]
+
+adjacency_matrix_right <- as.data.frame(adjacency_matrix_right)
+rownames(adjacency_matrix_right) <- adjacency_matrix_right[, 1]
+adjacency_matrix_right <- adjacency_matrix_right[, -1]
+
+# Ensure the matrices are numeric
+adjacency_matrix_left[] <- lapply(adjacency_matrix_left, as.numeric)
+adjacency_matrix_right[] <- lapply(adjacency_matrix_right, as.numeric)
+
+# Prepare data for plotting
+prepare_plot_data <- function(adjacency_matrix, region_centroids) {
+  # Convert adjacency matrix to long format
+  adjacency_long <- as.data.frame(as.table(as.matrix(adjacency_matrix)))
+  colnames(adjacency_long) <- c("region1", "region2", "value")
+  
+  # Filter only relevant regions
+  adjacency_long <- adjacency_long %>% filter(value == 1)
+  
+  # Join with coordinates to get x and y positions for region1 and region2
+  adjacency_long <- adjacency_long %>%
+    left_join(region_centroids, by = c("region1" = "region")) %>%
+    rename(x1 = x, y1 = y) %>%
+    left_join(region_centroids, by = c("region2" = "region")) %>%
+    rename(x2 = x, y2 = y)
+  
+  return(adjacency_long)
+}
+
+plot_data_left <- prepare_plot_data(adjacency_matrix_left, region_centroids_left)
+plot_data_right <- prepare_plot_data(adjacency_matrix_right, region_centroids_right)
+
+# Combine left and right data
+plot_data <- bind_rows(plot_data_left, plot_data_right)
+
+# Ensure there are no missing values in the coordinates
+plot_data <- plot_data %>% filter(!is.na(x1) & !is.na(y1) & !is.na(x2) & !is.na(y2))
+
+# Plot the brain regions with connections
+ggplot() +
+  geom_sf(data = dkt$data, aes(geometry = geometry, fill = region), color = "white") +
+  geom_segment(data = plot_data, aes(x = x1, y = y1, xend = x2, yend = y2, color = region1), linewidth = 0.5) +
+  theme_void() +
+  theme(legend.position = "none") +
+  ggtitle("Brain Regions with Adjacency Connections")
+```
